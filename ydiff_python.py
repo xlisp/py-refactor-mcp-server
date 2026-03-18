@@ -12,6 +12,7 @@ Usage:
 import ast
 import sys
 import os
+import subprocess
 
 sys.setrecursionlimit(50000)
 
@@ -727,6 +728,387 @@ def htmlize(changes, file1, file2, text1, text2):
 
 
 # ================================================================
+#                      Git Helpers
+# ================================================================
+
+def git_run(args, cwd):
+    """Run a git command and return stdout."""
+    r = subprocess.run(['git'] + args, capture_output=True, text=True, cwd=cwd)
+    if r.returncode != 0:
+        raise RuntimeError(f"git {' '.join(args)}: {r.stderr.strip()}")
+    return r.stdout
+
+
+def git_commit_info(project_dir, commit_id):
+    """Get commit metadata."""
+    out = git_run(['log', '-1', '--format=%H%n%h%n%an%n%ai%n%s', commit_id],
+                  cwd=project_dir)
+    lines = out.strip().split('\n')
+    return {
+        'hash': lines[0],
+        'short_hash': lines[1],
+        'author': lines[2],
+        'date': lines[3],
+        'message': lines[4] if len(lines) > 4 else '',
+    }
+
+
+def git_changed_files(project_dir, commit_id):
+    """Get list of (status, old_path, new_path) for files changed in a commit."""
+    # Check if this is the initial commit (no parent)
+    r = subprocess.run(['git', 'rev-parse', f'{commit_id}^'],
+                       capture_output=True, text=True, cwd=project_dir)
+    if r.returncode != 0:
+        # Initial commit: diff against empty tree
+        out = git_run(['diff-tree', '--no-commit-id', '-r', '--name-status',
+                       '--root', commit_id], cwd=project_dir)
+    else:
+        out = git_run(['diff', '--name-status', f'{commit_id}^', commit_id],
+                      cwd=project_dir)
+    files = []
+    for line in out.strip().split('\n'):
+        if not line:
+            continue
+        parts = line.split('\t')
+        status = parts[0][0]
+        if status in ('R', 'C'):
+            files.append((status, parts[1], parts[2]))
+        elif status == 'A':
+            files.append((status, None, parts[1]))
+        elif status == 'D':
+            files.append((status, parts[1], None))
+        else:
+            files.append((status, parts[1], parts[1]))
+    return files
+
+
+def git_file_content(project_dir, commit_id, file_path):
+    """Get file content at a specific commit. Returns '' if not found."""
+    r = subprocess.run(
+        ['git', 'show', f'{commit_id}:{file_path}'],
+        capture_output=True, text=True, cwd=project_dir
+    )
+    return r.stdout if r.returncode == 0 else ''
+
+
+# ================================================================
+#              Commit Diff - Multi-file Report
+# ================================================================
+
+COMMIT_CSS = """\
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; overflow: hidden; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
+       background: #1e1e2e; color: #cdd6f4; }
+.commit-header {
+    background: #181825; padding: 16px 24px; border-bottom: 1px solid #313244;
+}
+.commit-header h2 { font-size: 18px; color: #89b4fa; margin-bottom: 6px; }
+.commit-header .meta { font-size: 13px; color: #a6adc8; }
+.commit-header .stats { font-size: 13px; color: #a6adc8; margin-top: 4px; }
+.layout { display: flex; height: calc(100vh - 90px); min-height: 0; }
+.file-nav {
+    width: 280px; min-width: 200px; background: #181825;
+    border-right: 1px solid #313244; overflow-y: auto; padding: 8px 0;
+    flex-shrink: 0;
+}
+.file-item {
+    padding: 6px 16px; cursor: pointer; font-size: 13px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    border-left: 3px solid transparent;
+}
+.file-item:hover { background: #313244; }
+.file-item.active { background: #313244; border-left-color: #89b4fa; color: #89b4fa; }
+.file-item .st { display: inline-block; width: 20px; font-weight: bold; }
+.st-M { color: #fab387; }
+.st-A { color: #a6e3a1; }
+.st-D { color: #f38ba8; }
+.st-R { color: #89b4fa; }
+.file-content {
+    flex: 1; overflow: hidden; display: flex; flex-direction: column; min-width: 0;
+}
+.file-title {
+    padding: 8px 16px; font-size: 14px; font-weight: 600;
+    background: #11111b; border-bottom: 1px solid #313244; color: #cba6f7;
+    flex-shrink: 0;
+}
+.diff-area {
+    flex: 1; display: flex; overflow: hidden; min-height: 0;
+}
+.file-diff {
+    display: none; flex-direction: column; flex: 1;
+    min-height: 0; overflow: hidden;
+}
+.file-diff.active { display: flex; }
+.file-note {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    color: #6c7086; font-size: 15px;
+}
+/* Left pane: old version, red tint */
+.diff-area div.src-left {
+    width: 50%; overflow: auto; float: none;
+    padding: 0 8px; border: none; border-radius: 0;
+    border-right: 1px solid #313244;
+    background: #2a1f1f;
+}
+/* Right pane: new version, green tint */
+.diff-area div.src-right {
+    width: 50%; overflow: auto; float: none;
+    padding: 0 8px; border: none; border-radius: 0;
+    background: #1f2a1f;
+}
+.diff-area pre {
+    color: #cdd6f4; font-size: 13px; line-height: 180%;
+    white-space: pre-wrap; word-wrap: break-word;
+}
+/* Deletion highlights (left pane) */
+.diff-area .d {
+    background-color: rgba(248,113,133,0.35); border: solid 1px #f38ba8;
+    border-radius: 3px;
+}
+/* Insertion highlights (right pane) */
+.diff-area .i {
+    background-color: rgba(134,239,172,0.30); border: solid 1px #a6e3a1;
+    border-radius: 3px;
+}
+/* Move/match highlights */
+.diff-area .m {
+    background-color: rgba(137,180,250,0.15); border: solid 1px #585b70;
+    border-radius: 3px; cursor: crosshair;
+}
+"""
+
+COMMIT_NAV_JS = """\
+window['$']=function(a){return document.getElementById(a)};
+var minStep=10,nSteps=30,stepInterval=10,blockRange=5;
+var nodeHLColor='rgba(201,176,169,0.5)',bgColor='',bodyBlockedColor='rgba(250,240,230,0.1)';
+var eventCount={},moving=false;
+var matchId1=null,matchId2=null,cTimeout;
+function sign(x){return x>0?1:x<0?-1:0;}
+function elementPosition(id){
+  var obj=$(id),l=0,t=0;
+  if(obj&&obj.offsetParent){l=obj.offsetLeft;t=obj.offsetTop;
+    while(obj=obj.offsetParent){l+=obj.offsetLeft;t+=obj.offsetTop;}}
+  return{x:l,y:t};
+}
+function scrollCheck(c,dx,dy){
+  var oT=c.scrollTop,oL=c.scrollLeft;c.scrollTop+=dy;c.scrollLeft+=dx;
+  var aX=c.scrollLeft-oL,aY=c.scrollTop-oT;
+  if(!eventCount[c.id])eventCount[c.id]=0;
+  if((Math.abs(dx)>blockRange&&aX===0)||(Math.abs(dy)>blockRange&&aY===0)){
+    c.style.backgroundColor=bodyBlockedColor;return true;
+  }else{eventCount[c.id]+=1;c.style.backgroundColor=bgColor;return false;}
+}
+function getContainer(e){
+  while(e&&!e.classList.contains('src-left')&&!e.classList.contains('src-right'))
+    e=e.parentElement||e.parentNode;return e;
+}
+function getSide(c){return c.id.startsWith('left')?'left':'right';}
+function matchWindow(lid,tid,n){
+  moving=true;var l=$(lid),t=$(tid);
+  if(!l||!t){moving=false;return;}
+  var lc=getContainer(l),tc=getContainer(t);
+  if(!lc||!tc){moving=false;return;}
+  var lp=elementPosition(lid).y-lc.scrollTop;
+  var tp=elementPosition(tid).y-tc.scrollTop;
+  var dy=tp-lp,dx=lc.scrollLeft-tc.scrollLeft;
+  if(dy===0&&dx===0){clearTimeout(cTimeout);moving=false;}
+  else if(n<=1){scrollCheck(tc,dx,dy);moving=false;}
+  else{
+    var ss=Math.floor(Math.abs(dy)/n);
+    var ms=Math.min(minStep,Math.abs(dy));
+    var step=(Math.abs(ss)<minStep?ms:ss)*sign(dy);
+    var blocked=scrollCheck(tc,dx,step);
+    if(!blocked){cTimeout=setTimeout(function(){
+      matchWindow(lid,tid,Math.floor(dy/step)-1);
+    },stepInterval);}else{clearTimeout(cTimeout);moving=false;}
+  }
+}
+var highlighted=[];
+function putHL(id,c){var e=$(id);if(e){e.style.backgroundColor=c;
+  if(c!==bgColor)highlighted.push(id);}}
+function clearHL(){for(var i=0;i<highlighted.length;i++)putHL(highlighted[i],bgColor);
+  highlighted=[];}
+function highlight(me,lid,tid){clearHL();putHL(lid,nodeHLColor);putHL(tid,nodeHLColor);}
+function instantMove(me){
+  me.style.backgroundColor=bgColor;
+  if(!eventCount[me.id])eventCount[me.id]=0;
+  if(!moving&&eventCount[me.id]===0){
+    if(matchId1&&matchId2){
+      if(getSide(me)==='left')matchWindow(matchId1,matchId2,1);
+      else matchWindow(matchId2,matchId1,1);
+    }
+  }
+  if(eventCount[me.id]>0)eventCount[me.id]-=1;
+}
+function getTarget(x){x=x||window.event;return x.target||x.srcElement;}
+function showFile(idx){
+  var items=document.querySelectorAll('.file-item');
+  var diffs=document.querySelectorAll('.file-diff');
+  for(var i=0;i<items.length;i++){
+    items[i].classList.remove('active');
+    diffs[i].classList.remove('active');
+  }
+  items[idx].classList.add('active');
+  diffs[idx].classList.add('active');
+  matchId1=null;matchId2=null;
+}
+function bindNav(){
+  var tags=document.getElementsByTagName('A');
+  for(var i=0;i<tags.length;i++){
+    tags[i].onmouseover=function(e){
+      var t=getTarget(e),lid=t.id,tid=t.getAttribute('tid');
+      if(!lid||!tid)return;
+      var c=getContainer(t);highlight(c,lid,tid);
+    };
+    tags[i].onclick=function(e){
+      var t=getTarget(e),lid=t.id,tid=t.getAttribute('tid');
+      if(!lid||!tid)return;
+      var c=getContainer(t);highlight(c,lid,tid);
+      if(getSide(c)==='left'){matchId1=lid;matchId2=tid;}
+      else{matchId1=tid;matchId2=lid;}
+      matchWindow(lid,tid,nSteps);
+    };
+  }
+  var divs=document.querySelectorAll('.src-left,.src-right');
+  for(var i=0;i<divs.length;i++){
+    divs[i].onscroll=function(e){instantMove(getTarget(e));};
+  }
+}
+window.onload=function(){bindNav();};
+"""
+
+
+def diff_file_pair(text1, text2, filepath):
+    """Diff two versions of a file. Returns (changes, tagged1, tagged2)."""
+    global _uid_counter, _uid_map, _diff_hash, _moving, _progress_count
+
+    if not text1 and not text2:
+        return None, '', ''
+
+    node1 = parse_python(text1) if text1 else Node('Module', 0, 0, [])
+    node2 = parse_python(text2) if text2 else Node('Module', 0, 0, [])
+
+    print(f"  [diff] {filepath}")
+    _diff_hash = {}
+    _moving = False
+    _progress_count = 0
+
+    s1, s2 = node_size(node1), node_size(node2)
+    set_node_context(node1, 'top')
+    set_node_context(node2, 'top')
+
+    changes, cost = diff_node(node1, node2)
+    _diff_hash = {}
+    changes = find_moves(changes)
+
+    tags1 = change_tags(changes, 'left')
+    tags2 = change_tags(changes, 'right')
+    tagged1 = apply_tags(text1, tags1)
+    tagged2 = apply_tags(text2, tags2)
+    return changes, tagged1, tagged2
+
+
+def diff_commit(project_dir, commit_id, output=None):
+    """Generate a multi-file diff report for a git commit."""
+    global _uid_counter, _uid_map
+
+    project_dir = os.path.abspath(project_dir)
+    info = git_commit_info(project_dir, commit_id)
+    changed = git_changed_files(project_dir, commit_id)
+
+    print(f"[commit] {info['short_hash']} - {info['message']}")
+    print(f"[files]  {len(changed)} files changed")
+
+    # Process each file
+    file_diffs = []  # (status, display_path, tagged1, tagged2, is_python)
+    _uid_counter = 0
+    _uid_map = {}
+
+    for status, old_path, new_path in changed:
+        display_path = new_path or old_path
+        is_py = display_path.endswith('.py')
+
+        if status == 'R':
+            display_path = f"{old_path} \u2192 {new_path}"
+
+        if not is_py:
+            file_diffs.append((status, display_path, '', '', False))
+            continue
+
+        text1 = git_file_content(project_dir, f'{commit_id}^', old_path) if old_path else ''
+        text2 = git_file_content(project_dir, commit_id, new_path) if new_path else ''
+
+        try:
+            _, tagged1, tagged2 = diff_file_pair(text1, text2, display_path)
+            file_diffs.append((status, display_path, tagged1, tagged2, True))
+        except SyntaxError as e:
+            print(f"  [skip] {display_path}: parse error - {e}")
+            file_diffs.append((status, display_path, '', '', False))
+
+    # Generate HTML report
+    out_file = output or f"commit-{info['short_hash']}.html"
+    py_count = sum(1 for *_, is_py in file_diffs if is_py)
+
+    with open(out_file, 'w', encoding='utf-8') as f:
+        f.write("<!DOCTYPE html>\n<html>\n<head>\n")
+        f.write('<meta charset="utf-8">\n')
+        f.write(f"<title>Commit {info['short_hash']} - {escape_text(info['message'])}</title>\n")
+        f.write(f"<style>\n{COMMIT_CSS}</style>\n")
+        f.write(f"<script>\n{COMMIT_NAV_JS}</script>\n")
+        f.write("</head>\n<body>\n")
+
+        # Header
+        f.write('<div class="commit-header">\n')
+        f.write(f'  <h2>{info["short_hash"]} - {escape_text(info["message"])}</h2>\n')
+        f.write(f'  <div class="meta">{escape_text(info["author"])} | {info["date"]}</div>\n')
+        f.write(f'  <div class="stats">{len(changed)} files changed, '
+                f'{py_count} Python files with structural diff</div>\n')
+        f.write('</div>\n')
+
+        # Layout
+        f.write('<div class="layout">\n')
+
+        # Sidebar
+        f.write('<div class="file-nav">\n')
+        for i, (status, path, *_) in enumerate(file_diffs):
+            active = ' active' if i == 0 else ''
+            f.write(f'  <div class="file-item{active}" onclick="showFile({i})">'
+                    f'<span class="st st-{status}">{status}</span> '
+                    f'{escape_text(path)}</div>\n')
+        f.write('</div>\n')
+
+        # File diffs
+        f.write('<div class="file-content">\n')
+        for i, (status, path, tagged1, tagged2, is_py) in enumerate(file_diffs):
+            active = ' active' if i == 0 else ''
+            f.write(f'<div class="file-diff{active}" id="fdiff-{i}">\n')
+            f.write(f'  <div class="file-title">{escape_text(path)}</div>\n')
+
+            if not is_py:
+                label = {'A': 'added', 'D': 'deleted', 'M': 'modified', 'R': 'renamed'}
+                f.write(f'  <div class="file-note">Non-Python file {label.get(status, "changed")}'
+                        f' (structural diff not available)</div>\n')
+            else:
+                f.write('  <div class="diff-area">\n')
+                f.write(f'    <div id="left-{i}" class="src-left"><pre>')
+                f.write(tagged1)
+                f.write('</pre></div>\n')
+                f.write(f'    <div id="right-{i}" class="src-right"><pre>')
+                f.write(tagged2)
+                f.write('</pre></div>\n')
+                f.write('  </div>\n')
+
+            f.write('</div>\n')
+        f.write('</div>\n')  # file-content
+        f.write('</div>\n')  # layout
+        f.write("</body>\n</html>\n")
+
+    print(f"[output] {out_file}")
+    return out_file
+
+
+# ================================================================
 #                          Main
 # ================================================================
 
@@ -745,10 +1127,23 @@ def diff_python(file1, file2):
 
 
 def main():
-    if len(sys.argv) != 3:
-        print(f"Usage: {sys.argv[0]} <file1.py> <file2.py>")
+    if len(sys.argv) >= 3 and sys.argv[1] == '--commit':
+        # Commit mode: ydiff_python.py --commit <project_dir> <commit_id> [output.html]
+        if len(sys.argv) < 4:
+            print(f"Usage: {sys.argv[0]} --commit <project_dir> <commit_id> [output.html]")
+            sys.exit(1)
+        project_dir = sys.argv[2]
+        commit_id = sys.argv[3]
+        output = sys.argv[4] if len(sys.argv) > 4 else None
+        diff_commit(project_dir, commit_id, output)
+    elif len(sys.argv) == 3:
+        # File mode: ydiff_python.py <file1.py> <file2.py>
+        diff_python(sys.argv[1], sys.argv[2])
+    else:
+        print(f"Usage:")
+        print(f"  {sys.argv[0]} <file1.py> <file2.py>              # compare two files")
+        print(f"  {sys.argv[0]} --commit <project_dir> <commit_id>  # diff a git commit")
         sys.exit(1)
-    diff_python(sys.argv[1], sys.argv[2])
 
 
 if __name__ == '__main__':
