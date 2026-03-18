@@ -1,356 +1,226 @@
-# PyRefactor Analyzer
+# PyRefactor — Code Review Tools Built for Humans
 
-Python 代码重构审查建议工具 —— 静态扫描你的 Python 项目，自动发现代码坏味道，给出重构建议，并生成精美的 HTML 可视化报告。支持**一键自动重构**：拆分长函数、拆分长文件、按分类创建新模块。
+Static analysis, auto-refactoring, structural diff, and MCP server for Python projects.
 
-提供三种使用方式：**代码审查工具**、**自动重构工具** 和 **MCP Server**（可接入 Claude Desktop / VSCode / Cursor 等 AI 编辑器）。
+> **Vision:** Everything in this project is designed for **humans to read, review, and understand code** — not for machines. Machines can parse anything; humans cannot. The bottleneck in software is always human comprehension. We build tools that make code **easy to see, easy to input, and easy to learn**.
 
-## 功能特性
+## Why This Exists
 
-### 代码问题检测
+Code review is fundamentally a human activity. Yet most tools output walls of text that only machines love. We believe:
 
-| 检测项 | 说明 | 默认阈值 |
-|--------|------|----------|
-| 函数过长 | 函数体行数超过阈值 | 30 行 |
-| 参数过多 | 函数签名参数过多 | 5 个 |
-| 局部变量过多 | 单函数内变量定义过多，建议提取 | 8 个 |
-| 圈复杂度高 | McCabe 复杂度超标 | 10 |
-| 文件过长 | 单文件代码行数过多 | 400 行 |
-| 单文件类过多 | 一个文件中定义太多类 | 4 个 |
-| 单文件函数过多 | 一个文件中顶层函数太多 | 10 个 |
+- **Easy to see** — Visual, structural diffs that show *what changed and why*, not just which lines moved. Color-coded, interactive, side-by-side HTML reports you can click through.
+- **Easy to input** — Lisp taught us that the simplest syntax is the most powerful. One command, one commit hash — that's all you need. No config files, no setup ceremony.
+- **Easy to learn** — Every report is self-explanatory. Open it in a browser, click around, understand. No manual required.
 
-### 智能重组建议
+## Vision & Roadmap
 
-- **函数前缀聚类**：自动识别共享前缀的函数（如 `data_load_csv`、`data_load_json`），建议提取到独立模块（`data_utils.py`）
-- **类拆分建议**：当单文件类过多时，建议将每个类独立为单独模块（`UserManager` → `user_manager.py`）
+```
+Built for humans who review code — not machines that process it.
+```
 
-### HTML 可视化报告
+### Core Principles
 
-- 项目健康评分（0-100 分）
-- 统计概览仪表盘（文件数、行数、函数数、问题数）
-- 问题分类分布饼图
-- 函数长度 TOP 15 横向柱状图
-- 圈复杂度 TOP 15 横向柱状图
-- 文件大小分布柱状图
-- 问题详情表格（支持按严重度 / 类型 / 关键字筛选）
-- 文件重组建议卡片
-- 暗色主题，响应式布局，移动端友好
+1. **Human-first output** — Every report, every diff, every suggestion is designed for a person sitting in front of a screen. If it's not immediately clear at a glance, it's a bug.
 
-### 自动重构能力
+2. **Visual thinking** — Code is a tree, not a list of lines. Our structural diff sees code the way programmers think about it: functions, classes, blocks — not line 47 vs line 52.
 
-| 能力 | 说明 |
-|------|------|
-| **长函数拆分** | 基于 AST 分析函数体中的逻辑块（if/elif 分支、循环、连续赋值组），自动提取为子函数，追踪变量依赖，生成参数和返回值 |
-| **长文件拆分** | 将类移到独立模块（`UserManager` → `user_manager.py`），按前缀分组的函数移到工具模块（`data_load_*` → `data_utils.py`），原文件自动添加 import 重导出 |
-| **分类建档** | 按函数命名前缀自动聚类，智能命名新模块文件 |
-| **测试验证** | `--test` 指定测试命令，每步重构后自动运行测试，失败则自动回滚 |
-| **安全执行** | 默认 dry-run 预览模式，`--backup` 自动备份原文件为 `.bak` |
+3. **Minimal input, maximum insight** — Inspired by Lisp's elegance: the simplest possible interface that expresses the full intent. One command gets you a complete code review. One commit hash gets you a full structural diff.
 
-## 环境要求
+4. **Lower the barrier to learning** — A junior developer should be able to open our HTML report and immediately understand what changed and what needs attention. The tool teaches through its output.
 
-- Python 3.10+
-- 命令行工具：无第三方依赖（仅标准库）
-- MCP Server：需安装 `mcp[cli]`
-- HTML 报告使用 CDN 加载 [Chart.js](https://www.chartjs.org/)（需联网查看图表）
+### Roadmap
 
-## 安装
+- [ ] **Cross-file move detection** — Track functions that moved between files across commits
+- [ ] **Semantic rename detection** — Identify renamed variables/functions even when the name is completely different
+- [ ] **Review comments overlay** — Annotate structural diffs with AI-generated review suggestions
+- [ ] **Multi-commit timeline** — Visualize how a function/class evolved across a series of commits
+- [ ] **Live MCP review** — AI editor reads the structural diff in real-time and suggests improvements during code review
+- [ ] **Support more languages** — Extend structural diff beyond Python (JavaScript, Go, Rust)
+- [ ] **Lisp-style input DSL** — A tiny expression language for composing complex code queries: `(diff (commit HEAD~3) (files "src/**/*.py") (ignore tests))`
+
+---
+
+## Quick Start
 
 ```bash
 git clone <repo-url>
-cd py-refactor
+cd py-refactor-mcp-server
 
-# MCP Server 需要额外安装依赖
-pip install "mcp[cli]"
+# Code review report (no dependencies needed)
+python refactor_analyzer.py /path/to/project
+
+# Structural diff of a git commit
+python ydiff_python.py --commit /path/to/project abc1234
+
+# Compare two files
+python ydiff_python.py old.py new.py
+
+# Auto-refactor (preview mode)
+python refactor_auto.py /path/to/project
+
+# MCP Server (requires: pip install "mcp[cli]")
+python refactor_mcp_server.py
 ```
 
 ---
 
-## 方式一：命令行工具
+## Tool 1: Code Review Analyzer
 
-### 基本用法
+Static analysis that scans Python projects for code smells and generates visual HTML reports.
+
+### What It Detects
+
+| Issue | Description | Default Threshold |
+|-------|-------------|-------------------|
+| Long functions | Function body exceeds line limit | 30 lines |
+| Too many params | Excessive function parameters | 5 |
+| Too many local vars | Too many variables in one function | 8 |
+| High complexity | McCabe cyclomatic complexity | 10 |
+| Long files | Single file too large | 400 lines |
+| Too many classes | Too many classes in one file | 4 |
+| Too many functions | Too many top-level functions in one file | 10 |
+
+### Usage
 
 ```bash
-# 扫描当前目录
-python refactor_analyzer.py .
+# Basic scan
+python refactor_analyzer.py /path/to/project
 
-# 扫描指定项目目录
-python refactor_analyzer.py /path/to/your/project
+# Custom output path
+python refactor_analyzer.py /path/to/project -o report.html
 
-# 指定输出文件名
-python refactor_analyzer.py /path/to/project -o my_report.html
-```
-
-### 自定义阈值
-
-```bash
-# 放宽函数长度限制到 50 行，复杂度到 15
+# Custom thresholds
 python refactor_analyzer.py . --max-func-lines 50 --max-complexity 15
-
-# 严格模式：更低的阈值
-python refactor_analyzer.py . --max-func-lines 20 --max-params 3 --max-vars 5
 ```
 
-### 完整参数列表
-
-```
-用法: refactor_analyzer.py [-h] [-o OUTPUT] [--max-func-lines N]
-                           [--max-params N] [--max-vars N]
-                           [--max-complexity N] [--max-file-lines N]
-                           project_dir
-
-位置参数:
-  project_dir             要扫描的 Python 项目目录
-
-可选参数:
-  -h, --help              显示帮助信息
-  -o, --output OUTPUT     输出 HTML 报告路径 (默认: refactor_report.html)
-  --max-func-lines N      函数最大行数阈值 (默认: 30)
-  --max-params N          函数最大参数数 (默认: 5)
-  --max-vars N            局部变量最大数 (默认: 8)
-  --max-complexity N      圈复杂度阈值 (默认: 10)
-  --max-file-lines N      文件最大行数 (默认: 400)
-```
-
-### 终端输出示例
-
-```
-正在扫描: /home/user/my-project
-扫描完成:
-  文件数: 23
-  总行数: 4,567
-  函数数: 189
-  问题数: 17
-  重组建议: 5 条
-
-报告已生成: /home/user/my-project/refactor_report.html
-```
-
-### 作为库使用
+### As a Library
 
 ```python
 from refactor_analyzer import scan_project, generate_html_report
 
-# 扫描项目
 result = scan_project("/path/to/project")
-
-# 访问分析结果
-print(f"发现 {len(result.issues)} 个问题")
+print(f"Found {len(result.issues)} issues")
 for issue in result.issues:
     print(f"  [{issue.severity}] {issue.file}:{issue.line} - {issue.title}")
 
-# 查看重组建议
-for s in result.reorg_suggestions:
-    print(f"  {s.source_file} → {s.suggested_file}: {', '.join(s.items)}")
-
-# 生成 HTML 报告
 generate_html_report(result, "report.html")
 ```
 
+### HTML Report Features
+
+- Health score (0–100) with grade (A/B/C/D)
+- Statistics dashboard
+- Issue distribution pie chart
+- Function length / complexity TOP 15 bar charts
+- Filterable issue table (by severity, type, keyword)
+- File reorganization suggestion cards
+- Dark theme, responsive layout
+
 ---
 
-## 方式二：自动重构工具
+## Tool 2: Auto Refactoring
 
-`refactor_auto.py` 可以自动执行重构操作，真正修改代码文件。
+Automatically splits long functions and large files with dependency tracking and test verification.
 
-### 预览模式（默认，不修改任何文件）
-
-```bash
-# 分析项目，显示重构计划
-python refactor_auto.py .
-
-# 分析指定项目
-python refactor_auto.py /path/to/your/project
-
-# 生成 HTML 预览报告
-python refactor_auto.py . --preview-html preview.html
-```
-
-### 执行重构
+### Usage
 
 ```bash
-# 执行重构（直接修改文件）
-python refactor_auto.py . --apply
+# Preview mode (no files modified)
+python refactor_auto.py /path/to/project
 
-# 执行重构并备份原文件（推荐）
-python refactor_auto.py . --apply --backup
+# Execute refactoring with backup
+python refactor_auto.py /path/to/project --apply --backup
 
-# 只执行文件拆分，不拆函数
+# With test verification (auto-rollback on failure)
+python refactor_auto.py /path/to/project --apply --test "pytest tests/"
+
+# Only split files / only split functions
 python refactor_auto.py . --apply --file-only
-
-# 只执行函数拆分，不拆文件
 python refactor_auto.py . --apply --func-only
 ```
 
-### 测试验证模式
+### How It Works
 
-通过 `--test` 参数指定测试命令，工具会在**每步重构操作后**自动运行测试。如果测试失败，该步操作会被**自动回滚**，确保重构不会破坏现有功能。
+**Function splitting:**
+- Analyzes function body structure via AST (if/elif branches, loops, try/except blocks)
+- Automatically infers parameters (variables read from outer scope) and return values (variables written and used later)
+- Generates named sub-functions with proper signatures
 
-```bash
-# 重构 + 每步跑 pytest 验证，失败自动回滚
-python refactor_auto.py . --apply --test "pytest tests/"
+**File splitting:**
+- Classes → individual modules (`UserManager` → `user_manager.py`)
+- Functions → grouped by naming prefix (`data_load_*` → `data_utils.py`)
+- Tracks imports and generates correct re-exports in the original file
 
-# 组合 backup 使用
-python refactor_auto.py . --apply --backup --test "pytest tests/ -v"
-
-# 使用其他测试命令
-python refactor_auto.py . --apply --test "python -m pytest -x"
-python refactor_auto.py . --apply --test "python -m unittest discover"
-
-# 只验证文件拆分
-python refactor_auto.py . --apply --file-only --test "pytest tests/"
-```
-
-工作流程：
-
-1. **重构前先跑一次测试** — 确认现有测试能通过，否则直接退出
-2. **每步重构后跑测试** — 文件拆分 / 函数拆分每执行一步就验证
-3. **失败自动回滚** — 测试不通过时，恢复所有受影响的文件（包括删除新建的文件）
-4. **继续下一步** — 某步回滚不影响后续操作继续执行
-5. **最终统计** — 显示成功应用和回滚的操作数
-
-终端输出示例：
-
-```
-先验证现有测试是否通过...
-  运行测试: pytest tests/
-  ✓ 测试通过
-  现有测试通过，开始重构。
-
-开始执行重构 (3 个操作)...
-
-[文件拆分] 拆分文件: app.py
-  创建: sample_project/user_manager.py
-  创建: sample_project/data_utils.py
-  更新: app.py
-  运行测试: pytest tests/
-  ✓ 测试通过
-
-[函数拆分] 拆分长函数: UserManager.process_user_data
-  重构: app.py → process_user_data
-  运行测试: pytest tests/
-  ✗ 测试失败!
-    FAILED tests/test_app.py::test_process - AssertionError
-  ↩ 回滚: 拆分长函数: UserManager.process_user_data
-
-============================================================
-  重构完成！
-  成功应用: 1 个操作
-  测试失败回滚: 1 个操作
-============================================================
-```
-
-### 自定义阈值
-
-```bash
-# 放宽标准：函数超 50 行才拆，文件超 500 行才拆
-python refactor_auto.py . --apply --max-func-lines 50 --max-file-lines 500
-```
-
-### 完整参数列表
-
-```
-用法: refactor_auto.py [-h] [--apply] [--backup] [--preview-html PATH]
-                       [--max-func-lines N] [--max-file-lines N]
-                       [--file-only] [--func-only] [--test CMD]
-                       project_dir
-
-位置参数:
-  project_dir             要重构的 Python 项目目录
-
-可选参数:
-  -h, --help              显示帮助信息
-  --apply                 执行重构 (默认仅预览)
-  --backup                执行前备份原文件为 .bak
-  --preview-html PATH     生成 HTML 预览报告
-  --max-func-lines N      函数行数阈值 (默认: 30)
-  --max-file-lines N      文件行数阈值 (默认: 400)
-  --file-only             只执行文件拆分
-  --func-only             只执行函数拆分
-  --test CMD              每步重构后运行的测试命令，失败则回滚
-```
-
-### 终端输出示例
-
-```
-正在分析: /home/user/my-project
-
-======================================================================
-  Python 自动重构计划
-======================================================================
-
-  函数拆分: 2 个
-  文件拆分: 1 个
-  总操作数: 3 个
-
-----------------------------------------------------------------------
-  函数拆分计划
-----------------------------------------------------------------------
-
-  [1] 拆分长函数: UserManager.process_user_data
-      函数 UserManager.process_user_data 共 110 行，将拆分为 4 个子函数:
-        _process_user_data_check_user_id(user_id, action)  [第58-67行]
-        _process_user_data_check_action(user, action, ...)  [第72-101行] → 返回 status, counter
-        _process_user_data_check_status(status, backup)  [第139-141行]
-
-----------------------------------------------------------------------
-  文件拆分计划
-----------------------------------------------------------------------
-
-  [1] 拆分文件: app.py
-      文件 app.py (261 行) 将拆分为:
-        → user_manager.py: UserManager
-        → order_processor.py: OrderProcessor
-        → data_utils.py: data_load_csv, data_load_json, data_export_csv, ...
-        → validate_utils.py: validate_email, validate_phone, validate_postal_code
-        → format_utils.py: format_currency, format_date, format_phone
-
-======================================================================
-  提示: 添加 --apply 参数执行重构
-        添加 --apply --backup 执行并备份原文件 (.bak)
-======================================================================
-```
-
-### 重构策略详解
-
-#### 长函数拆分
-
-工具基于 AST 分析函数体的结构，按以下边界自动切分代码块：
-
-- **if/elif/else 分支** → 每个顶层条件分支为独立块
-- **for/while 循环** → 每个循环体为独立块
-- **try/except** → 异常处理为独立块
-- **连续简单语句** → 赋值、表达式等攒够一组后切分
-
-对每个提取的块，工具自动：
-1. 分析块内读取的外部变量 → 作为子函数的**参数**
-2. 分析块内写入且后续使用的变量 → 作为子函数的**返回值**
-3. 检测块内是否有 `return` → 有 return 的中间块不提取（避免改变控制流）
-4. 从代码内容推断子函数名（如 `_process_data_check_user_id`）
-
-#### 文件拆分
-
-- **类拆分**：当文件中类超过 4 个时，每个类移到独立文件（`CamelCase` → `snake_case.py`）
-- **函数分组**：按函数名前缀聚类（`data_load_*`、`data_export_*` → `data_utils.py`）
-- **依赖追踪**：自动分析每个移出的类/函数用到了哪些 import，只复制必要的 import 到新文件
-- **原文件更新**：删除移出的代码，添加 `from .new_module import ...` 重导出
+**Test-driven safety:**
+1. Runs tests before refactoring to establish baseline
+2. Runs tests after each operation
+3. Auto-rolls back failed operations
+4. Continues with remaining operations
 
 ---
 
-## 方式三：MCP Server
+## Tool 3: Structural Code Diff (ydiff)
 
-MCP Server 让 AI 助手（Claude Desktop、VSCode Copilot、Cursor 等）直接调用代码审查能力，在对话中即时分析项目质量。
+Language-aware structural diff for Python. Inspired by [ydiff](https://github.com/yinwang0/ydiff) (Yin Wang).
 
-### 启动 MCP Server
+Unlike line-based diff, this compares code at the **AST level** — it understands functions, classes, expressions, and can detect **moved code blocks**.
+
+### Compare Two Files
 
 ```bash
+python ydiff_python.py old.py new.py
+# → generates old-new.html
+```
+
+### Git Commit Diff Report
+
+```bash
+# Diff a specific commit
+python ydiff_python.py --commit /path/to/repo abc1234
+
+# Custom output path
+python ydiff_python.py --commit . HEAD~1 review.html
+```
+
+### What the Report Shows
+
+| Color | Meaning |
+|-------|---------|
+| **Red background** (left panel) | Old version — deleted code highlighted in red |
+| **Green background** (right panel) | New version — inserted code highlighted in green |
+| **Gray/blue border** | Matched or moved code — click to jump to counterpart |
+
+### Commit Report Features
+
+- Dark-themed tabbed UI
+- File navigator sidebar with status badges (M/A/D/R)
+- Per-file structural diff with left-red / right-green panels
+- Click any matched element to auto-scroll the other panel
+- Handles initial commits, added/deleted files, renames
+
+### Algorithm
+
+1. **Parse** — Python `ast` module → custom Node tree with source positions
+2. **Structural diff** — Recursive tree comparison with DP + memoization; same-name definitions are force-matched
+3. **Move detection** — Iteratively matches large deletions against large insertions to find relocated code
+4. **HTML generation** — Inserts change tags into original source text; embeds interactive navigation JS
+
+---
+
+## Tool 4: MCP Server
+
+Exposes all capabilities to AI editors (Claude Desktop, VSCode, Cursor) via the [Model Context Protocol](https://modelcontextprotocol.io).
+
+### Setup
+
+```bash
+pip install "mcp[cli]"
 python refactor_mcp_server.py
 ```
 
-Server 以 `stdio` 模式运行，等待 MCP 客户端连接。
+### Configuration
 
-### 配置 Claude Desktop
-
-编辑 `~/Library/Application Support/Claude/claude_desktop_config.json`（macOS）或 `%APPDATA%\Claude\claude_desktop_config.json`（Windows）：
-
+**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
 ```json
 {
   "mcpServers": {
@@ -362,10 +232,7 @@ Server 以 `stdio` 模式运行，等待 MCP 客户端连接。
 }
 ```
 
-### 配置 VSCode
-
-在项目根目录创建 `.vscode/mcp.json`：
-
+**VSCode** (`.vscode/mcp.json`):
 ```json
 {
   "servers": {
@@ -378,163 +245,66 @@ Server 以 `stdio` 模式运行，等待 MCP 客户端连接。
 }
 ```
 
-### 配置 Cursor / Windsurf
+### Available Tools (11)
 
-在 MCP 设置中添加：
+| Tool | Description |
+|------|-------------|
+| `scan_project` | Full project scan — issues, suggestions, health score |
+| `analyze_file` | Single file analysis with function metrics |
+| `analyze_function` | Deep analysis of a specific function |
+| `find_long_functions` | TOP N longest functions |
+| `find_complex_functions` | TOP N highest complexity functions |
+| `suggest_file_reorg` | File reorganization suggestions |
+| `generate_report` | Generate HTML quality report |
+| `health_score` | Quick 0–100 score |
+| `auto_refactor` | Auto-refactor (preview or apply) |
+| **`ydiff_files`** | Structural diff of two Python files → HTML |
+| **`ydiff_commit`** | Structural diff of a git commit → multi-file HTML report |
 
-```json
-{
-  "mcpServers": {
-    "py-refactor": {
-      "command": "python",
-      "args": ["/absolute/path/to/refactor_mcp_server.py"]
-    }
-  }
-}
-```
-
-### MCP Tools 一览
-
-Server 提供 **7 个工具**，AI 助手可在对话中按需调用：
-
-| Tool | 功能 | 典型用法 |
-|------|------|----------|
-| `scan_project` | 全项目扫描，返回所有问题 + 重组建议 + 健康评分 | "帮我扫描一下这个项目的代码质量" |
-| `analyze_file` | 分析单个文件，列出函数指标排行 | "分析一下 utils.py 的代码质量" |
-| `analyze_function` | 深度分析单个函数，给出具体重构建议 | "process_order 这个函数怎么重构比较好" |
-| `find_long_functions` | 查找最长函数 TOP N | "找出项目中最长的 10 个函数" |
-| `find_complex_functions` | 查找最高复杂度函数 TOP N | "哪些函数复杂度最高" |
-| `suggest_file_reorg` | 文件重组建议 | "这个项目的文件结构需要调整吗" |
-| `generate_report` | 生成 HTML 可视化报告 | "生成一份完整的代码质量报告" |
-| `health_score` | 快速健康评分 0-100 | "这个项目代码质量怎么样" |
-
-### Tool 参数详情
-
-#### `scan_project`
-
-全面扫描项目，返回完整的问题列表和重构建议。
-
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `project_dir` | string | 必填 | 项目目录绝对路径 |
-| `max_func_lines` | int | 30 | 函数行数阈值 |
-| `max_func_params` | int | 5 | 参数数量阈值 |
-| `max_local_vars` | int | 8 | 局部变量数量阈值 |
-| `max_complexity` | int | 10 | 圈复杂度阈值 |
-| `max_file_lines` | int | 400 | 文件行数阈值 |
-
-#### `analyze_function`
-
-深度分析指定函数。
-
-| 参数 | 类型 | 说明 |
-|------|------|------|
-| `file_path` | string | Python 文件绝对路径 |
-| `function_name` | string | 函数名，方法用 `ClassName.method_name` 格式 |
-
-#### `find_long_functions` / `find_complex_functions`
-
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `project_dir` | string | 必填 | 项目目录绝对路径 |
-| `min_lines` / `min_complexity` | int | 30 / 10 | 最低阈值 |
-| `top_n` | int | 20 | 返回结果数量上限 |
-
-#### `generate_report`
-
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `project_dir` | string | 必填 | 项目目录绝对路径 |
-| `output_path` | string | `refactor_report.html` | 输出 HTML 路径 |
-| `max_func_lines` | int | 30 | 函数行数阈值 |
-| `max_complexity` | int | 10 | 复杂度阈值 |
-
-### 对话使用示例
-
-配置好 MCP Server 后，在 AI 助手对话中直接使用自然语言：
+### Example Conversation
 
 ```
-用户: 帮我扫描 /home/user/my-project 这个项目的代码质量
+User: Generate a structural diff for commit abc1234 in /home/user/myproject
 
-AI: (调用 scan_project) 项目健康评分 72/100，发现 17 个问题...
-    高严重度: process_user_data 函数 89 行，建议拆分为...
+AI:  (calls ydiff_commit) Commit diff report generated: commit-abc1234.html
+     3 files changed, 2 Python files with structural diff.
+     Open in browser to view side-by-side comparison.
 
-用户: process_user_data 这个函数具体怎么重构？
+User: How's the code quality of this project?
 
-AI: (调用 analyze_function) 该函数有 89 行、12 个局部变量、
-    圈复杂度 18，建议：
-    1. 将验证逻辑提取为 _validate_user()
-    2. 用字典映射替代 action 的 if-elif 分支...
+AI:  (calls health_score) Health score: 72/100 (Grade B)
+     17 issues found. Main concern: process_user_data is 89 lines...
 
-用户: 生成一份完整的 HTML 报告
+User: Show me what changed in utils.py between these two versions
 
-AI: (调用 generate_report) 报告已生成: /home/user/refactor_report.html
+AI:  (calls ydiff_files) Structural diff generated: utils_old-utils_new.html
+     Red = deleted, Green = inserted, Gray = moved code.
 ```
 
 ---
 
-## 试用示例项目
-
-仓库自带一个 `sample_project/`，包含常见代码坏味道，可直接测试：
-
-```bash
-# 审查报告
-python refactor_analyzer.py sample_project -o demo_report.html
-
-# 预览自动重构计划
-python refactor_auto.py sample_project
-
-# 执行自动重构（备份原文件）
-python refactor_auto.py sample_project --apply --backup
-
-# 执行重构 + 测试验证（推荐）
-python refactor_auto.py sample_project --apply --test "pytest tests/"
-
-# 生成重构预览 HTML
-python refactor_auto.py sample_project --preview-html preview.html
-```
-
-## 问题严重度说明
-
-| 等级 | 颜色 | 含义 |
-|------|------|------|
-| **高** | 红色 | 函数行数超阈值 2 倍，或复杂度超阈值 2 倍 |
-| **中** | 黄色 | 超过阈值但未达 2 倍，参数过多，变量过多等 |
-| **低** | 绿色 | 单文件函数数量偏多等轻度问题 |
-
-## 健康评分算法
+## Project Structure
 
 ```
-score = 100 - (高严重度问题数 × 8 + 其他问题数 × 3) × 100 / (函数总数 × 10)
-```
-
-| 分数 | 等级 | 评价 |
-|------|------|------|
-| 80-100 | A | 优秀 - 代码质量良好 |
-| 60-79 | B | 一般 - 建议关注高优问题 |
-| 40-59 | C | 需改进 - 存在较多质量问题 |
-| 0-39 | D | 较差 - 强烈建议重构 |
-
-## 自动排除目录
-
-扫描时自动跳过以下目录：
-
-```
-.venv  venv  env  __pycache__  .git  node_modules
-.mypy_cache  .pytest_cache  dist  build  .eggs
-```
-
-## 项目结构
-
-```
-py-refactor/
-├── refactor_analyzer.py      # 代码审查工具（分析 + HTML 报告生成）
-├── refactor_auto.py          # 自动重构工具（拆分函数/文件/分类建档）
-├── refactor_mcp_server.py    # MCP Server（8 个 AI 可调用的工具）
-├── sample_project/           # 示例项目（包含各种代码坏味道）
+py-refactor-mcp-server/
+├── refactor_analyzer.py      # Code review analyzer + HTML report
+├── refactor_auto.py          # Auto-refactoring engine
+├── refactor_mcp_server.py    # MCP Server (11 tools)
+├── ydiff_python.py           # Structural code diff (AST-level)
+├── sample_project/           # Sample project with code smells
 │   └── app.py
+├── demo/                     # ydiff demo files
+│   ├── v1.py
+│   └── v2.py
 └── README.md
 ```
+
+## Requirements
+
+- Python 3.10+
+- CLI tools: no third-party dependencies (stdlib only)
+- MCP Server: `pip install "mcp[cli]"`
+- HTML reports: Chart.js loaded via CDN (needs internet for charts)
 
 ## License
 

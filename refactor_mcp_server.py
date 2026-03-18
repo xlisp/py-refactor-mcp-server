@@ -911,6 +911,108 @@ async def auto_refactor(
     return "\n".join(lines)
 
 
+# ─── ydiff: structural code diff ──────────────────────────────────────────
+
+@mcp.tool()
+async def ydiff_files(
+    file_path1: str,
+    file_path2: str,
+    output_path: str = "",
+) -> str:
+    """Compare two Python files using structural AST-level diff.
+
+    Unlike line-based diff, this understands code structure — it detects moved
+    functions, renamed variables, and semantic changes. Generates an interactive
+    side-by-side HTML report with click-to-navigate highlighting.
+
+    Args:
+        file_path1: Absolute path to the old Python file
+        file_path2: Absolute path to the new Python file
+        output_path: Output HTML path (default: auto-generated from filenames)
+    """
+    for fp in (file_path1, file_path2):
+        if not Path(fp).is_file():
+            return f"Error: File not found: {fp}"
+
+    try:
+        from ydiff_python import diff_python, base_name
+    except ImportError:
+        return ("Error: ydiff_python.py not found. "
+                "Please ensure it is in the same directory as refactor_mcp_server.py")
+
+    try:
+        if output_path:
+            import ydiff_python
+            with open(file_path1, 'r', encoding='utf-8') as f:
+                text1 = f.read()
+            with open(file_path2, 'r', encoding='utf-8') as f:
+                text2 = f.read()
+            node1 = ydiff_python.parse_python(text1)
+            node2 = ydiff_python.parse_python(text2)
+            changes = ydiff_python.diff(node1, node2)
+            # Temporarily override output
+            out = ydiff_python.htmlize(changes, file_path1, file_path2, text1, text2)
+            if output_path != out:
+                Path(out).rename(output_path)
+                out = output_path
+        else:
+            out = diff_python(file_path1, file_path2)
+
+        return (f"Structural diff report generated: {out}\n"
+                f"Open in browser to view interactive side-by-side comparison.\n"
+                f"  - Red highlights: deleted code\n"
+                f"  - Green highlights: inserted code\n"
+                f"  - Gray links: matched/moved code (click to navigate)")
+    except SyntaxError as e:
+        return f"Error: Failed to parse Python file: {e}"
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+async def ydiff_commit(
+    project_dir: str,
+    commit_id: str,
+    output_path: str = "",
+) -> str:
+    """Generate a structural diff report for a git commit.
+
+    Analyzes all Python files changed in the specified commit using AST-level
+    structural comparison. Produces a multi-file HTML report with a file
+    navigator sidebar, left-red/right-green diff panels, and interactive
+    click-to-navigate code matching.
+
+    Args:
+        project_dir: Absolute path to the git repository
+        commit_id: Git commit hash (full or short) to analyze
+        output_path: Output HTML path (default: commit-<short_hash>.html)
+    """
+    path = Path(project_dir)
+    if not path.is_dir():
+        return f"Error: Directory does not exist: {project_dir}"
+
+    try:
+        from ydiff_python import diff_commit
+    except ImportError:
+        return ("Error: ydiff_python.py not found. "
+                "Please ensure it is in the same directory as refactor_mcp_server.py")
+
+    try:
+        out = diff_commit(project_dir, commit_id, output_path or None)
+
+        return (f"Commit diff report generated: {out}\n"
+                f"Open in browser to view the structural diff.\n"
+                f"Features:\n"
+                f"  - File navigator sidebar with change status (M/A/D/R)\n"
+                f"  - Left panel (red): old version with deletions highlighted\n"
+                f"  - Right panel (green): new version with insertions highlighted\n"
+                f"  - Click matched code to scroll to corresponding position")
+    except RuntimeError as e:
+        return f"Git error: {e}"
+    except Exception as e:
+        return f"Error: {e}"
+
+
 # ─── HTML 报告生成 ─────────────────────────────────────────────────────────
 def _build_html_report(result: AnalysisResult, t: dict) -> str:
     severity_counts = {"high": 0, "medium": 0, "low": 0}
