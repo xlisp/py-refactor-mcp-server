@@ -948,6 +948,7 @@ function filterTable() {{
 
 # ─── CLI 入口 ────────────────────────────────────────────────────────────────
 def main():
+    global MAX_FUNC_LINES, MAX_FUNC_PARAMS, MAX_LOCAL_VARS, MAX_COMPLEXITY, MAX_FILE_LINES
     import argparse
     parser = argparse.ArgumentParser(
         description="Python 代码重构审查建议工具",
@@ -975,7 +976,6 @@ def main():
     args = parser.parse_args()
 
     # 更新阈值
-    global MAX_FUNC_LINES, MAX_FUNC_PARAMS, MAX_LOCAL_VARS, MAX_COMPLEXITY, MAX_FILE_LINES
     MAX_FUNC_LINES = args.max_func_lines
     MAX_FUNC_PARAMS = args.max_params
     MAX_LOCAL_VARS = args.max_vars
