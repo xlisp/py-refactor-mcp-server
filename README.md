@@ -42,6 +42,7 @@ Python 代码重构审查建议工具 —— 静态扫描你的 Python 项目，
 | **长函数拆分** | 基于 AST 分析函数体中的逻辑块（if/elif 分支、循环、连续赋值组），自动提取为子函数，追踪变量依赖，生成参数和返回值 |
 | **长文件拆分** | 将类移到独立模块（`UserManager` → `user_manager.py`），按前缀分组的函数移到工具模块（`data_load_*` → `data_utils.py`），原文件自动添加 import 重导出 |
 | **分类建档** | 按函数命名前缀自动聚类，智能命名新模块文件 |
+| **测试验证** | `--test` 指定测试命令，每步重构后自动运行测试，失败则自动回滚 |
 | **安全执行** | 默认 dry-run 预览模式，`--backup` 自动备份原文件为 `.bak` |
 
 ## 环境要求
@@ -179,6 +180,64 @@ python refactor_auto.py . --apply --file-only
 python refactor_auto.py . --apply --func-only
 ```
 
+### 测试验证模式
+
+通过 `--test` 参数指定测试命令，工具会在**每步重构操作后**自动运行测试。如果测试失败，该步操作会被**自动回滚**，确保重构不会破坏现有功能。
+
+```bash
+# 重构 + 每步跑 pytest 验证，失败自动回滚
+python refactor_auto.py . --apply --test "pytest tests/"
+
+# 组合 backup 使用
+python refactor_auto.py . --apply --backup --test "pytest tests/ -v"
+
+# 使用其他测试命令
+python refactor_auto.py . --apply --test "python -m pytest -x"
+python refactor_auto.py . --apply --test "python -m unittest discover"
+
+# 只验证文件拆分
+python refactor_auto.py . --apply --file-only --test "pytest tests/"
+```
+
+工作流程：
+
+1. **重构前先跑一次测试** — 确认现有测试能通过，否则直接退出
+2. **每步重构后跑测试** — 文件拆分 / 函数拆分每执行一步就验证
+3. **失败自动回滚** — 测试不通过时，恢复所有受影响的文件（包括删除新建的文件）
+4. **继续下一步** — 某步回滚不影响后续操作继续执行
+5. **最终统计** — 显示成功应用和回滚的操作数
+
+终端输出示例：
+
+```
+先验证现有测试是否通过...
+  运行测试: pytest tests/
+  ✓ 测试通过
+  现有测试通过，开始重构。
+
+开始执行重构 (3 个操作)...
+
+[文件拆分] 拆分文件: app.py
+  创建: sample_project/user_manager.py
+  创建: sample_project/data_utils.py
+  更新: app.py
+  运行测试: pytest tests/
+  ✓ 测试通过
+
+[函数拆分] 拆分长函数: UserManager.process_user_data
+  重构: app.py → process_user_data
+  运行测试: pytest tests/
+  ✗ 测试失败!
+    FAILED tests/test_app.py::test_process - AssertionError
+  ↩ 回滚: 拆分长函数: UserManager.process_user_data
+
+============================================================
+  重构完成！
+  成功应用: 1 个操作
+  测试失败回滚: 1 个操作
+============================================================
+```
+
 ### 自定义阈值
 
 ```bash
@@ -191,7 +250,7 @@ python refactor_auto.py . --apply --max-func-lines 50 --max-file-lines 500
 ```
 用法: refactor_auto.py [-h] [--apply] [--backup] [--preview-html PATH]
                        [--max-func-lines N] [--max-file-lines N]
-                       [--file-only] [--func-only]
+                       [--file-only] [--func-only] [--test CMD]
                        project_dir
 
 位置参数:
@@ -206,6 +265,7 @@ python refactor_auto.py . --apply --max-func-lines 50 --max-file-lines 500
   --max-file-lines N      文件行数阈值 (默认: 400)
   --file-only             只执行文件拆分
   --func-only             只执行函数拆分
+  --test CMD              每步重构后运行的测试命令，失败则回滚
 ```
 
 ### 终端输出示例
@@ -426,6 +486,9 @@ python refactor_auto.py sample_project
 
 # 执行自动重构（备份原文件）
 python refactor_auto.py sample_project --apply --backup
+
+# 执行重构 + 测试验证（推荐）
+python refactor_auto.py sample_project --apply --test "pytest tests/"
 
 # 生成重构预览 HTML
 python refactor_auto.py sample_project --preview-html preview.html

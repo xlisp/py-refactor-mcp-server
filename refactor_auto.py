@@ -22,6 +22,7 @@ import shutil
 import copy
 import textwrap
 import argparse
+import subprocess
 from dataclasses import dataclass, field
 from collections import defaultdict
 from pathlib import Path
@@ -1281,6 +1282,107 @@ h1{{text-align:center;font-size:2em;background:linear-gradient(135deg,var(--a),v
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  第六部分：快照与测试验证
+# ═══════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class FileSnapshot:
+    """文件快照，用于回滚。"""
+    path: str
+    content: Optional[str]   # None 表示文件原本不存在
+    existed: bool
+
+
+def _take_snapshot(file_paths: list[str]) -> list[FileSnapshot]:
+    """保存一组文件的当前内容快照。"""
+    snapshots = []
+    for fp in file_paths:
+        p = Path(fp)
+        if p.exists():
+            snapshots.append(FileSnapshot(
+                path=fp,
+                content=p.read_text(encoding="utf-8", errors="replace"),
+                existed=True,
+            ))
+        else:
+            snapshots.append(FileSnapshot(path=fp, content=None, existed=False))
+    return snapshots
+
+
+def _restore_snapshot(snapshots: list[FileSnapshot]):
+    """从快照恢复文件状态。"""
+    for snap in snapshots:
+        p = Path(snap.path)
+        if snap.existed:
+            p.write_text(snap.content, encoding="utf-8")
+        else:
+            # 文件原本不存在 → 删除新建的文件
+            if p.exists():
+                p.unlink()
+
+
+def _get_affected_paths(action: RefactorAction, root_dir: str) -> list[str]:
+    """获取一个重构操作会影响的所有文件路径。"""
+    root = Path(root_dir).resolve()
+    paths = []
+
+    if action.kind == "split_file" and action.file_plan:
+        plan = action.file_plan
+        source_path = root / plan.source_path
+        paths.append(str(source_path))
+        source_dir = source_path.parent
+        for mod in plan.new_modules:
+            paths.append(str(source_dir / mod.filename))
+        # __init__.py 可能被创建
+        init_path = source_dir / "__init__.py"
+        paths.append(str(init_path))
+
+    elif action.kind == "split_func" and action.func_plan:
+        plan = action.func_plan
+        paths.append(str(root / plan.file_path))
+
+    return paths
+
+
+def run_test_command(test_cmd: str, cwd: str) -> tuple[bool, str]:
+    """
+    执行测试命令。
+    返回 (是否通过, 输出摘要)。
+    """
+    print(f"  运行测试: {test_cmd}")
+    try:
+        result = subprocess.run(
+            test_cmd,
+            shell=True,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        passed = result.returncode == 0
+
+        # 提取摘要 (最后几行通常包含结果)
+        output = result.stdout + result.stderr
+        summary_lines = [l for l in output.strip().splitlines() if l.strip()]
+        summary = "\n".join(summary_lines[-5:]) if summary_lines else "(无输出)"
+
+        if passed:
+            print(f"  ✓ 测试通过")
+        else:
+            print(f"  ✗ 测试失败!")
+            print(f"    {summary}")
+
+        return passed, summary
+
+    except subprocess.TimeoutExpired:
+        print(f"  ✗ 测试超时 (300s)")
+        return False, "测试执行超时"
+    except Exception as e:
+        print(f"  ✗ 测试执行错误: {e}")
+        return False, str(e)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  CLI 入口
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -1296,11 +1398,16 @@ def main():
               python refactor_auto.py . --apply --backup         # 执行并备份
               python refactor_auto.py . --preview-html plan.html # 生成预览报告
               python refactor_auto.py . --max-func-lines 50      # 自定义阈值
+              python refactor_auto.py . --apply --test "pytest tests/"  # 重构后跑测试
 
             操作模式:
               默认 (dry-run):  只分析和展示计划，不修改任何文件
               --apply:         执行重构，修改/创建文件
               --apply --backup: 执行重构，原文件备份为 .bak
+
+            测试验证:
+              --test "pytest xxx":  每步重构后运行测试，失败则自动回滚该步操作
+              确保重构不破坏现有功能
 
             安全说明:
               建议先在 dry-run 模式查看计划，确认后再 --apply
@@ -1316,6 +1423,8 @@ def main():
                         help=f"文件行数阈值 (默认: {MAX_FILE_LINES})")
     parser.add_argument("--file-only", action="store_true", help="只执行文件拆分")
     parser.add_argument("--func-only", action="store_true", help="只执行函数拆分")
+    parser.add_argument("--test", metavar="CMD",
+                        help="每步重构后运行的测试命令 (如 'pytest tests/'), 失败则回滚")
 
     args = parser.parse_args()
 
@@ -1349,23 +1458,68 @@ def main():
         print("未发现需要重构的内容。")
         return
 
+    test_cmd = args.test
+
+    # 如果指定了测试命令，先验证测试在重构前能通过
+    if test_cmd:
+        print("先验证现有测试是否通过...\n")
+        passed, _ = run_test_command(test_cmd, project_dir)
+        if not passed:
+            print("\n错误: 重构前测试就已失败，请先修复测试再进行重构。")
+            sys.exit(1)
+        print("  现有测试通过，开始重构。\n")
+
     print(f"开始执行重构 ({len(actions)} 个操作)...\n")
 
     # 先执行文件拆分（因为函数拆分依赖文件存在）
     file_actions = [a for a in actions if a.kind == "split_file"]
     func_actions = [a for a in actions if a.kind == "split_func"]
 
+    applied_count = 0
+    rolled_back_count = 0
+
     for action in file_actions:
-        print(f"[文件拆分] {action.description}")
+        print(f"\n[文件拆分] {action.description}")
+        affected = _get_affected_paths(action, project_dir)
+        snapshots = _take_snapshot(affected)
+
         apply_file_split(action, project_dir, backup=args.backup)
 
+        if test_cmd:
+            passed, summary = run_test_command(test_cmd, project_dir)
+            if not passed:
+                print(f"  ↩ 回滚: {action.description}")
+                _restore_snapshot(snapshots)
+                rolled_back_count += 1
+                continue
+
+        applied_count += 1
+
     for action in func_actions:
-        print(f"[函数拆分] {action.description}")
+        print(f"\n[函数拆分] {action.description}")
+        affected = _get_affected_paths(action, project_dir)
+        snapshots = _take_snapshot(affected)
+
         apply_func_split(action, project_dir, backup=args.backup)
 
-    print(f"\n重构完成！共执行 {len(actions)} 个操作。")
+        if test_cmd:
+            passed, summary = run_test_command(test_cmd, project_dir)
+            if not passed:
+                print(f"  ↩ 回滚: {action.description}")
+                _restore_snapshot(snapshots)
+                rolled_back_count += 1
+                continue
+
+        applied_count += 1
+
+    print(f"\n{'=' * 60}")
+    print(f"  重构完成！")
+    print(f"  成功应用: {applied_count} 个操作")
+    if rolled_back_count:
+        print(f"  测试失败回滚: {rolled_back_count} 个操作")
     if args.backup:
-        print("原文件已备份为 .bak 文件。")
+        print("  原文件已备份为 .bak 文件。")
+    print(f"{'=' * 60}")
 
 
 if __name__ == "__main__":
